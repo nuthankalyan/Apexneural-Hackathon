@@ -1,0 +1,43 @@
+# Dependencies
+**/node_modules
+**/package-lock.json
+
+# Next.js
+client/my-app/.next/
+client/my-app/out/
+client/my-app/build
+client/my-app/.vercel
+**/.next
+
+# Environment variables
+**/.env
+**/.env.local
+**/.env.*.local
+**/.env.development.local
+**/.env.test.local
+**/.env.production.local
+
+# Logs
+**/logs
+**/*.log
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Debug
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Misc
+*.pem
+.DS_Store
+*.pem
+.env*.local 

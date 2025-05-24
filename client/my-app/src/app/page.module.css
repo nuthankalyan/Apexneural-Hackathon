@@ -14,6 +14,10 @@
   padding: 80px;
   gap: 64px;
   font-family: var(--font-geist-sans);
+  padding: 0;
+  margin: 0;
+  min-height: 100vh;
+  font-family: Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +36,9 @@
   flex-direction: column;
   gap: 32px;
   grid-row-start: 2;
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 .main ol {
@@ -59,6 +66,9 @@
 .ctas {
   display: flex;
   gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 2rem;
 }
 
 .ctas a {
@@ -164,5 +174,16 @@ a.secondary {
 @media (prefers-color-scheme: dark) {
   .logo {
     filter: invert();
+  }
+}
+
+@media (max-width: 768px) {
+  .main {
+    padding: 1rem;
+  }
+  
+  .ctas {
+    flex-direction: column;
+    align-items: center;
   }
 }

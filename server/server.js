@@ -46,12 +46,12 @@ mongoose.connect(MONGODB_URI, {
 
 // Routes
 const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/userRoutes');
 const workspaceRoutes = require('./routes/workspace');
+const documentRoutes = require('./routes/documents');
 
 app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
 app.use('/api/workspaces', workspaceRoutes);
+app.use('/api/documents', documentRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

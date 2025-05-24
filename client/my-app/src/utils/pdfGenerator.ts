@@ -109,7 +109,7 @@ function addBody(pdf: jsPDF, document: RfpDocument, contentWidth: number, margin
   // Add spacing
   y += 10;
 
-  // Process the main content - using the already defined function
+  // Process the main content
   const sections = splitIntoSections(document.content);
   
   for (const section of sections) {
@@ -119,14 +119,14 @@ function addBody(pdf: jsPDF, document: RfpDocument, contentWidth: number, margin
       y = 30;
     }
 
-    // Section headers (like "### 3. SCOPE OF WORK")
+    // Section headers (like "### 3. SCOPE OF WORK" or "1. EXECUTIVE SUMMARY")
     if (section.isHeader) {
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(14);
       pdf.setTextColor(0, 51, 153); // Blue color for headings
       
       // Clean up any markdown symbols
-      const cleanTitle = section.title.replace(/^#+\s*/, '').toUpperCase();
+      const cleanTitle = section.title.replace(/^#+\s*/, '');
       pdf.text(cleanTitle, margin, y);
       y += 10;
       
@@ -136,8 +136,8 @@ function addBody(pdf: jsPDF, document: RfpDocument, contentWidth: number, margin
       pdf.line(margin, y - 4, margin + 100, y - 4);
       y += 6;
     } 
-    else {
-      // Process the section content with smart formatting
+    // Process section content ONLY if it's not empty
+    if (section.content && section.content.trim() !== '') {
       y = processFormattedContent(pdf, section.content, contentWidth, margin, y);
     }
   }
@@ -170,8 +170,11 @@ function splitIntoSections(content: string) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     
-    // Check if this line is a section header (e.g., "1. SCOPE OF WORK" or "### 2. REQUIREMENTS")
-    const headerMatch = line.match(/^(?:#+\s*)?(\d+\.\s+[A-Z][A-Z\s]+)/);
+    // Enhanced header detection for various formats
+    const headerMatch = line.match(/^(?:#+\s*)?(\d+\.\s+)([A-Z][A-Z\s]+)(?:\:)?$/);
+    
+    // Special case: Check if this might be the start of a table
+    const isTableHeader = line.includes('|') && line.trim().startsWith('|') && line.trim().endsWith('|');
     
     if (headerMatch) {
       // If we were already in a section, add it to our sections array
@@ -182,20 +185,25 @@ function splitIntoSections(content: string) {
       // Start a new section
       currentSection = {
         isHeader: true,
-        title: headerMatch[1],
+        title: headerMatch[0],
         content: ''
       };
       
-      // Add the rest of the line after the header
-      const contentStart = headerMatch[0].length;
-      const restOfLine = line.substring(contentStart).trim();
-      
-      if (restOfLine) {
-        currentSection.content += restOfLine + '\n';
-      }
-      
       inSection = true;
     } 
+    // Special case for tables - keep table rows together
+    else if (isTableHeader || (inSection && currentSection.content.includes('|') && line.includes('|'))) {
+      if (inSection) {
+        currentSection.content += line + '\n';
+      } else {
+        currentSection = {
+          isHeader: false,
+          title: '',
+          content: line + '\n'
+        };
+        inSection = true;
+      }
+    }
     // Not a header, so add to current section's content
     else if (inSection) {
       currentSection.content += line + '\n';
@@ -216,7 +224,7 @@ function splitIntoSections(content: string) {
   }
   
   // Add the last section if it has content
-  if (inSection && currentSection.content.trim()) {
+  if (inSection) {
     sections.push(currentSection);
   }
   
@@ -238,72 +246,139 @@ function splitIntoSections(content: string) {
 function processFormattedContent(pdf: jsPDF, content: string, contentWidth: number, margin: number, startY: number): number {
   let y = startY;
   
-  // Split content into logical blocks (paragraphs, lists, etc.)
-  const blocks = splitIntoBlocks(content);
+  // Check for tables in the content
+  const hasTable = content.includes('|') && content.split('\n').some(line => 
+    line.trim().startsWith('|') && line.trim().endsWith('|')
+  );
   
-  for (const block of blocks) {
-    // Check if we need a new page
-    if (y > pdf.internal.pageSize.height - 30) {
-      pdf.addPage();
-      y = 30;
-    }
+  if (hasTable) {
+    // Process as a table
+    y = processTableContent(pdf, content, contentWidth, margin, y);
+  } else {
+    // Split content into logical blocks (paragraphs, lists, etc.)
+    const blocks = splitIntoBlocks(content);
     
-    // Process based on block type
-    if (block.type === 'heading') {
-      // Subsection heading
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(12);
-      pdf.setTextColor(0, 51, 153); // Blue for headings
+    for (const block of blocks) {
+      // Check if we need a new page
+      if (y > pdf.internal.pageSize.height - 30) {
+        pdf.addPage();
+        y = 30;
+      }
       
-      const headingLines = pdf.splitTextToSize(block.content, contentWidth);
-      pdf.text(headingLines, margin, y);
-      y += headingLines.length * 6 + 4;
-    } 
-    else if (block.type === 'subheading') {
-      // Minor heading or emphasized text
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(11);
-      pdf.setTextColor(50, 50, 50);
-      
-      const subheadingLines = pdf.splitTextToSize(block.content, contentWidth);
-      pdf.text(subheadingLines, margin, y);
-      y += subheadingLines.length * 5 + 3;
-    }
-    else if (block.type === 'list') {
-      // Bullet point list
-      const listItems = block.content.split('\n').filter(item => item.trim());
-      
-      for (const item of listItems) {
-        // Check if we need a new page
-        if (y > pdf.internal.pageSize.height - 30) {
-          pdf.addPage();
-          y = 30;
+      // Process based on block type
+      if (block.type === 'heading') {
+        // Subsection heading
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(12);
+        pdf.setTextColor(0, 51, 153); // Blue for headings
+        
+        const headingLines = pdf.splitTextToSize(block.content, contentWidth);
+        pdf.text(headingLines, margin, y);
+        y += headingLines.length * 6 + 4;
+      } 
+      else if (block.type === 'subheading') {
+        // Minor heading or emphasized text
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(11);
+        pdf.setTextColor(50, 50, 50);
+        
+        const subheadingLines = pdf.splitTextToSize(block.content, contentWidth);
+        pdf.text(subheadingLines, margin, y);
+        y += subheadingLines.length * 5 + 3;
+      }
+      else if (block.type === 'list') {
+        // Bullet point list
+        const listItems = block.content.split('\n').filter(item => item.trim());
+        
+        for (const item of listItems) {
+          // Check if we need a new page
+          if (y > pdf.internal.pageSize.height - 30) {
+            pdf.addPage();
+            y = 30;
+          }
+          
+          // Clean the item text (remove bullet characters)
+          const itemText = item.replace(/^[\s*\-•]+\s*/, '').trim();
+          
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(10);
+          pdf.setTextColor(0, 0, 0);
+          
+          // Add bullet point
+          pdf.text('•', margin, y);
+          
+          // Add indented text
+          const itemLines = pdf.splitTextToSize(itemText, contentWidth - 8);
+          pdf.text(itemLines, margin + 6, y);
+          y += itemLines.length * 5 + 2;
+        }
+      } 
+      else if (block.type === 'paragraph') {
+        // Bold detection for emphasis - look for markdown-style **bold text**
+        const boldPattern = /\*\*([^*]+)\*\*/g;
+        let formattedContent = block.content;
+        
+        // Use exec instead of matchAll for better compatibility
+        let boldMatches = [];
+        let match;
+        while ((match = boldPattern.exec(formattedContent)) !== null) {
+          boldMatches.push({
+            index: match.index,
+            text: match[0],
+            boldContent: match[1]
+          });
         }
         
-        // Clean the item text (remove bullet characters)
-        const itemText = item.replace(/^[\s*\-•]+\s*/, '').trim();
-        
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(10);
-        pdf.setTextColor(0, 0, 0);
-        
-        // Add bullet point
-        pdf.text('•', margin, y);
-        
-        // Add indented text
-        const itemLines = pdf.splitTextToSize(itemText, contentWidth - 8);
-        pdf.text(itemLines, margin + 6, y);
-        y += itemLines.length * 5 + 2;
+        if (boldMatches.length > 0) {
+          // Text has bold sections - need special handling
+          let lastIndex = 0;
+          let normalText = '';
+          
+          for (const match of boldMatches) {
+            const matchIndex = match.index;
+            
+            // Add normal text before bold
+            if (matchIndex > lastIndex) {
+              normalText = formattedContent.substring(lastIndex, matchIndex);
+              pdf.setFont('helvetica', 'normal');
+              pdf.setFontSize(10);
+              pdf.setTextColor(0, 0, 0);
+              const normalLines = pdf.splitTextToSize(normalText, contentWidth);
+              pdf.text(normalLines, margin, y);
+              y += normalLines.length * 5;
+            }
+            
+            // Add bold text
+            pdf.setFont('helvetica', 'bold');
+            const boldText = match.boldContent; // The text between **
+            const boldLines = pdf.splitTextToSize(boldText, contentWidth);
+            pdf.text(boldLines, margin, y);
+            y += boldLines.length * 5;
+            
+            lastIndex = matchIndex + match.text.length;
+          }
+          
+          // Add any remaining normal text
+          if (lastIndex < formattedContent.length) {
+            normalText = formattedContent.substring(lastIndex);
+            pdf.setFont('helvetica', 'normal');
+            const normalLines = pdf.splitTextToSize(normalText, contentWidth);
+            pdf.text(normalLines, margin, y);
+            y += normalLines.length * 5;
+          }
+          
+          y += 4; // Additional spacing after paragraph
+        } else {
+          // Normal paragraph without bold text
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(10);
+          pdf.setTextColor(0, 0, 0);
+          
+          const paraLines = pdf.splitTextToSize(block.content, contentWidth);
+          pdf.text(paraLines, margin, y);
+          y += paraLines.length * 5 + 4;
+        }
       }
-    } 
-    else if (block.type === 'paragraph') {
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(10);
-      pdf.setTextColor(0, 0, 0);
-      
-      const paraLines = pdf.splitTextToSize(block.content, contentWidth);
-      pdf.text(paraLines, margin, y);
-      y += paraLines.length * 5 + 4;
     }
   }
   
@@ -318,6 +393,7 @@ function splitIntoBlocks(content: string) {
   const lines = content.split('\n');
   let currentBlock = null;
   
+  // Process line by line
   for (const line of lines) {
     const trimmedLine = line.trim();
     if (!trimmedLine) {
@@ -329,16 +405,19 @@ function splitIntoBlocks(content: string) {
       continue;
     }
     
-    // Analyze the line to determine its type
+    // Enhanced line analysis to detect various types of formatting
     const isListItem = trimmedLine.match(/^[\s*\-•]+\s+/) !== null;
     const isHeading = trimmedLine.match(/^(\d+\.\d+|\*\*\*)\s+[A-Z]/) !== null;
     const isSubheading = trimmedLine.match(/^\s*([\w\s]+):\s*$/) !== null || 
                         trimmedLine.match(/^\s*\*\*(.+)\*\*\s*$/) !== null;
     
+    // Detect bolded lines (which could be hidden subheadings)
+    const isBoldLine = trimmedLine.match(/^\*\*([^*]+)\*\*$/) !== null;
+    
     // Determine block type based on line analysis
     let blockType;
     if (isHeading) blockType = 'heading';
-    else if (isSubheading) blockType = 'subheading';
+    else if (isSubheading || isBoldLine) blockType = 'subheading';
     else if (isListItem) blockType = 'list';
     else blockType = 'paragraph';
     
@@ -419,4 +498,195 @@ function addPagination(pdf: jsPDF) {
       { align: 'center' }
     );
   }
+}
+
+/**
+ * Process table content and render it as a structured table
+ */
+function processTableContent(pdf: jsPDF, content: string, contentWidth: number, margin: number, startY: number): number {
+  let y = startY;
+  
+  // Extract table rows
+  const tableRows = content.split('\n').filter(line => 
+    line.trim().includes('|')
+  );
+  
+  // Skip if no valid rows
+  if (tableRows.length === 0) {
+    return y;
+  }
+  
+  // Process header row
+  let headerRow = tableRows[0];
+  const isHeaderDivider = tableRows.length > 1 && tableRows[1].replace(/[|\-:\s]/g, '') === '';
+  
+  // If second row is a header divider (e.g., |---|---|), skip it for rendering
+  const dataStartIndex = isHeaderDivider ? 2 : 1;
+  
+  // Extract column headers and data rows
+  const headers = parseTableRow(headerRow);
+  const rows = tableRows.slice(dataStartIndex).map(parseTableRow).filter(row => row.length > 0);
+  
+  // Guard against empty tables or invalid data
+  if (headers.length === 0) {
+    return y;
+  }
+  
+  // Calculate column widths (proportional to content)
+  const allCells = [headers, ...rows];
+  const maxLengths = headers.map((_, colIndex) => {
+    const cellLengths = allCells.map(row => {
+      const cellContent = row[colIndex] || '';
+      return cellContent.length;
+    });
+    return Math.max(...cellLengths, 3); // Ensure minimum width
+  });
+  
+  // Calculate the total width needed and adjust proportions to fit
+  const totalContentWidth = contentWidth - 10; // Leave some margin space
+  const totalMaxLength = maxLengths.reduce((sum, length) => sum + length, 0);
+  const columnWidths = maxLengths.map(length => {
+    const proportion = length / totalMaxLength;
+    return Math.max(Math.floor(proportion * totalContentWidth), 15); // Minimum 15mm width
+  });
+  
+  // Set table styles
+  const cellPadding = 2;
+  const lineHeight = 8; // Slightly increase for better readability
+  const tableWidth = columnWidths.reduce((sum, width) => sum + width, 0);
+  const tableStartX = margin + ((contentWidth - tableWidth) / 2); // Center the table
+  
+  // Draw table header
+  pdf.setDrawColor(100, 100, 200); // More visible borders
+  pdf.setFillColor(235, 245, 255); // Light blue header background
+  pdf.setTextColor(0, 0, 0);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(9);
+  
+  // Header background
+  pdf.rect(tableStartX, y, tableWidth, lineHeight, 'F');
+  
+  // Header text
+  let x = tableStartX;
+  headers.forEach((header, i) => {
+    const headerLines = pdf.splitTextToSize(header.trim(), columnWidths[i] - 2*cellPadding);
+    pdf.text(headerLines, x + cellPadding, y + (lineHeight/2) + 2); // Center vertically
+    x += columnWidths[i];
+  });
+  
+  // Header underline - Check if coordinates are valid
+  y += lineHeight;
+  if (tableStartX >= 0 && y >= 0 && tableStartX + tableWidth >= 0) {
+    pdf.setLineWidth(0.3); // Slightly thicker line for header
+    pdf.line(tableStartX, y, tableStartX + tableWidth, y);
+  }
+  
+  // Draw data rows
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+  pdf.setDrawColor(180, 180, 200); // Lighter lines for row dividers
+  pdf.setLineWidth(0.1);
+  
+  // Process each row
+  for (const row of rows) {
+    // Skip rows with no cells
+    if (!row.length) continue;
+    
+    // Calculate row height based on content
+    const rowContentHeight = Math.max(...row.map((cell, i) => {
+      if (i >= columnWidths.length) return 1;
+      const cellLines = pdf.splitTextToSize(cell.trim(), columnWidths[i] - 2*cellPadding);
+      return cellLines.length;
+    })) * 3.5 + 4; // Height per line + padding
+    
+    const rowHeight = Math.max(rowContentHeight, lineHeight);
+    
+    // Check for page break
+    if (y + rowHeight > pdf.internal.pageSize.height - 30) {
+      pdf.addPage();
+      y = 30; // Reset y to top of new page
+      
+      // Redraw header on new page
+      pdf.setFillColor(235, 245, 255);
+      pdf.rect(tableStartX, y, tableWidth, lineHeight, 'F');
+      
+      x = tableStartX;
+      headers.forEach((header, i) => {
+        pdf.setFont('helvetica', 'bold');
+        const headerLines = pdf.splitTextToSize(header.trim(), columnWidths[i] - 2*cellPadding);
+        pdf.text(headerLines, x + cellPadding, y + (lineHeight/2) + 2);
+        x += columnWidths[i];
+      });
+      
+      y += lineHeight;
+      pdf.setLineWidth(0.3);
+      if (tableStartX >= 0 && y >= 0 && tableStartX + tableWidth >= 0) {
+        pdf.line(tableStartX, y, tableStartX + tableWidth, y);
+      }
+      pdf.setLineWidth(0.1);
+    }
+    
+    // Draw row background (alternating)
+    if (rows.indexOf(row) % 2 === 1) {
+      pdf.setFillColor(248, 250, 252); // Very light gray
+      pdf.rect(tableStartX, y, tableWidth, rowHeight, 'F');
+    }
+    
+    // Draw cell borders and text
+    x = tableStartX;
+    
+    // Draw vertical borders - validate coordinates first
+    for (let i = 0; i <= row.length && i <= columnWidths.length; i++) {
+      if (x >= 0 && y >= 0 && x <= pdf.internal.pageSize.width && y + rowHeight <= pdf.internal.pageSize.height) {
+        pdf.line(x, y, x, y + rowHeight);
+      }
+      if (i < columnWidths.length) x += columnWidths[i];
+    }
+    
+    // Reset for cell content
+    x = tableStartX;
+    pdf.setFont('helvetica', 'normal');
+    
+    // Draw cell content
+    row.forEach((cell, i) => {
+      if (i < columnWidths.length) {
+        const cellLines = pdf.splitTextToSize(cell.trim(), columnWidths[i] - 2*cellPadding);
+        pdf.text(cellLines, x + cellPadding, y + cellPadding + 3); // Position text with padding
+        x += columnWidths[i];
+      }
+    });
+    
+    // Draw horizontal border - validate coordinates
+    y += rowHeight;
+    if (tableStartX >= 0 && y >= 0 && tableStartX + tableWidth >= 0 && y <= pdf.internal.pageSize.height) {
+      pdf.line(tableStartX, y, tableStartX + tableWidth, y);
+    }
+  }
+  
+  // Add extra spacing after table
+  y += 8;
+  
+  return y;
+}
+
+/**
+ * Parse a table row from markdown table format
+ */
+function parseTableRow(rowText: string): string[] {
+  if (!rowText || !rowText.includes('|')) {
+    return [];
+  }
+  
+  // Split by pipe and remove empty first/last elements if the row starts/ends with pipe
+  let cells = rowText.split('|');
+  
+  if (cells[0].trim() === '') {
+    cells.shift();
+  }
+  
+  if (cells[cells.length - 1].trim() === '') {
+    cells.pop();
+  }
+  
+  return cells;
 }

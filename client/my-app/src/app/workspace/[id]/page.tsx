@@ -38,11 +38,29 @@ interface RFPProject {
   createdAt: string;
   agents: Agent[];
   finalDocument?: string;
+  documentId?: string; // Add this field to store the document ID
   proposal?: {
     status: 'pending' | 'generating' | 'completed';
     document?: string;
     createdAt?: string;
+    documentId?: string; // Add this field to store the proposal document ID
   }
+}
+
+interface Document {
+  _id: string;
+  title: string;
+  type: 'rfp' | 'proposal';
+  content: string;
+  createdAt: string;
+  originalRequest?: string;
+  metadata?: any;
+  relatedDocuments?: string[];
+  createdBy: {
+    _id: string;
+    username: string;
+    email: string;
+  };
 }
 
 export default function WorkspacePage() {
@@ -72,9 +90,22 @@ export default function WorkspacePage() {
     differentiators: ''
   });
 
+  // History tab state
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
+  const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
+  const [documentFilter, setDocumentFilter] = useState<'all' | 'rfp' | 'proposal'>('all');
+  const [documentError, setDocumentError] = useState('');
+
   useEffect(() => {
     fetchWorkspace();
   }, [workspaceId]);
+
+  useEffect(() => {
+    if (activeTab === 'history' && workspace) {
+      fetchDocuments();
+    }
+  }, [activeTab, workspace, documentFilter]);
 
   const fetchWorkspace = async () => {
     try {
@@ -112,6 +143,49 @@ export default function WorkspacePage() {
       setError('Network error. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchDocuments = async () => {
+    setIsLoadingDocuments(true);
+    setDocumentError('');
+
+    try {
+      const token = localStorage.getItem('token');
+      
+      if (!token) {
+        router.push('/login');
+        return;
+      }
+
+      let url = `http://localhost:5000/api/documents/workspace/${workspaceId}`;
+      if (documentFilter !== 'all') {
+        url += `?type=${documentFilter}`;
+      }
+      
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setDocuments(data.documents);
+        // Select the first document by default if none is currently selected
+        if (!selectedDocument && data.documents.length > 0) {
+          setSelectedDocument(data.documents[0]);
+        }
+      } else {
+        setDocumentError(data.message || 'Failed to fetch documents');
+      }
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+      setDocumentError('Network error. Please try again.');
+    } finally {
+      setIsLoadingDocuments(false);
     }
   };
 
@@ -289,7 +363,13 @@ export default function WorkspacePage() {
       ...Object.fromEntries(parallelResults.map(r => [r.agentId, r.result]))
     };
 
-    const finalDocument = await generateFinalRFP(project.description, allResults);
+    // When generating final RFP, pass the workspace and user info for storage
+    const finalDocument = await generateFinalRFP(
+      project.description, 
+      allResults, 
+      workspaceId,
+      localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')!)._id : undefined
+    );
     
     updateAgent('document', { status: 'completed', progress: 100, result: finalDocument });
     updateAgent('coordinator', { status: 'completed', progress: 100 });
@@ -324,16 +404,25 @@ export default function WorkspacePage() {
     }
   };
 
-  const generateFinalRFP = async (userRequest: string, agentResults: Record<string, string>): Promise<string> => {
+  const generateFinalRFP = async (
+    userRequest: string, 
+    agentResults: Record<string, string>,
+    workspaceId?: string,
+    userId?: string
+  ): Promise<string> => {
     try {
+      const token = localStorage.getItem('token');
       const response = await fetch('/api/agents/generate-rfp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           userRequest,
-          agentResults
+          agentResults,
+          workspaceId,
+          userId
         }),
       });
 
@@ -376,25 +465,164 @@ export default function WorkspacePage() {
     return formattedSections;
   };
 
+  // Add these functions to format and display document content with tables
+  const formatDocumentContent = (content: string): React.ReactNode => {
+    if (!content) return null;
+    
+    // Split content by possible table sections (text containing |)
+    const parts = content.split(/(\n(?:\|.+\|\n)+)/g);
+    
+    return parts.map((part, index) => {
+      // Check if this part looks like a table
+      if (part.trim().startsWith('|') && part.includes('|\n')) {
+        return (
+          <div key={`table-section-${index}`} style={{ overflowX: 'auto', margin: '1rem 0' }}>
+            <table style={{ 
+              width: '100%', 
+              borderCollapse: 'collapse', 
+              border: '1px solid #ddd'
+            }}>
+              {renderMarkdownTable(part)}
+            </table>
+          </div>
+        );
+      }
+      
+      // Format regular text - handle bold formatting with markdown style
+      return (
+        <div key={`text-section-${index}`} style={{ marginBottom: '0.5rem' }}>
+          {formatTextWithMarkdown(part)}
+        </div>
+      );
+    });
+  };
+
+  // Format regular text with markdown features (bold, etc.)
+  const formatTextWithMarkdown = (text: string): React.ReactNode => {
+    // Split by bold markers
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    
+    return (
+      <div style={{ whiteSpace: 'pre-wrap' }}>
+        {parts.map((part, i) => {
+          if (part.startsWith('**') && part.endsWith('**')) {
+            // Bold text
+            return <strong key={i}>{part.slice(2, -2)}</strong>;
+          } else {
+            // Regular text
+            return <span key={i}>{part}</span>;
+          }
+        })}
+      </div>
+    );
+  };
+
+  // Helper function to render markdown tables as HTML
+  const renderMarkdownTable = (tableContent: string) => {
+    const rows = tableContent.trim().split('\n');
+    
+    // Process each row
+    return rows.map((row, rowIndex) => {
+      // Skip the separator row (contains only |, -, and :)
+      if (row.match(/^\|[\s\-:|]+\|$/)) {
+        return null;
+      }
+      
+      // Clean up the row and split into cells
+      const cells = row.split('|')
+        .filter((cell, i, arr) => i !== 0 && i !== arr.length - 1) // Remove empty first/last if row starts/ends with |
+        .map(cell => cell.trim());
+      
+      // Determine if this is a header row (usually the first row)
+      const isHeader = rowIndex === 0;
+      
+      return (
+        <tr key={`row-${rowIndex}`}>
+          {cells.map((cell, cellIndex) => {
+            const CellTag = isHeader ? 'th' : 'td';
+            return (
+              <CellTag 
+                key={`cell-${rowIndex}-${cellIndex}`}
+                style={{
+                  padding: '8px 12px',
+                  border: '1px solid #ddd',
+                  textAlign: isHeader ? 'center' : 'left',
+                  background: isHeader ? '#f0f9ff' : (rowIndex % 2 === 0 ? '#fff' : '#f9fafb')
+                }}
+              >
+                {cell}
+              </CellTag>
+            );
+          })}
+        </tr>
+      );
+    });
+  };
+
+  // Function to prepare content for PDF generation
+  const prepareContentForPdf = (content: string): string => {
+    if (!content) return '';
+    
+    // Normalize line endings
+    let formattedContent = content.replace(/\r\n/g, '\n');
+    
+    // Add spacing after section headers to ensure they're properly detected
+    formattedContent = formattedContent.replace(
+      /^(\d+\.\s+[A-Z][A-Z\s]+)$/gm, 
+      '$1\n\nSection content.'
+    );
+    
+    // Ensure each section has at least some content
+    const sections = formattedContent.match(/^(\d+\.\s+[A-Z][A-Z\s]+)$/gm) || [];
+    for (const section of sections) {
+      const sectionIndex = formattedContent.indexOf(section);
+      const nextSectionIndex = formattedContent.indexOf('\n\d+\.\s+[A-Z][A-Z\s]+', sectionIndex + section.length);
+      
+      // If there's no content between this section and the next (or end), add placeholder
+      const hasContent = nextSectionIndex > -1 ? 
+        formattedContent.substring(sectionIndex + section.length, nextSectionIndex).trim().length > 0 :
+        formattedContent.substring(sectionIndex + section.length).trim().length > 0;
+        
+      if (!hasContent) {
+        formattedContent = formattedContent.replace(
+          section,
+          `${section}\n\nThis section contains information related to ${section.replace(/^\d+\.\s+/, '')}.`
+        );
+      }
+    }
+    
+    // Ensure tables have proper structure
+    formattedContent = formattedContent.replace(/\|\s*\n(?!\s*\|)/g, '|\n\n');
+    
+    // Fix headers without separator rows
+    const tableRegex = /\|(.*)\|\n(?!\s*\|[\s-:|]+\|)/g;
+    formattedContent = formattedContent.replace(tableRegex, (match, headerRow) => {
+      const columnCount = headerRow.split('|').length;
+      let separatorRow = '|';
+      for (let i = 0; i < columnCount; i++) {
+        separatorRow += ' --- |';
+      }
+      return match + separatorRow + '\n';
+    });
+    
+    return formattedContent;
+  };
+
   const handleDownloadPdf = () => {
     if (!currentProject?.finalDocument || !workspace) return;
     
     try {
+      // Get proposal content and ensure each section has content
+      const content = currentProject.finalDocument;
+      
       // Improve the content formatting for better PDF structure
-      const cleanContent = currentProject.finalDocument
-        .replace(/\r\n/g, '\n')
+      const cleanContent = prepareContentForPdf(content)
         .replace(/\n{3,}/g, '\n\n') // Replace excessive newlines
-        // Format section headers
-        .replace(/^(\d+)\.\s+([A-Z][A-Z\s]+)$/gm, `### $1. $2`)
-        // Format subsection headings
-        .replace(/^(\d+\.\d+)\s+([A-Za-z][A-Za-z\s]+)$/gm, `$1 $2`) 
-        // Add paragraph breaks between distinct sections
-        .replace(/(\n[^\n]+:)\n([A-Z])/g, '$1\n\n$2')
         .trim();
       
       const rfpDocument: RfpDocument = {
         title: currentProject.title,
-        description: currentProject.description,
+        description: currentProject.description || "This document contains details about the project requirements.",
         content: cleanContent,
         createdAt: currentProject.createdAt,
         createdBy: workspace.owner.username,
@@ -443,14 +671,21 @@ export default function WorkspacePage() {
       setShowCompanyInfoForm(false);
       
       // Call the proposal generator API
+      const token = localStorage.getItem('token');
+      const userData = JSON.parse(localStorage.getItem('user') || '{}');
+
       const response = await fetch('/api/agents/generate-proposal', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           rfpDocument: rfpProject.finalDocument,
-          companyInfo
+          companyInfo,
+          workspaceId,
+          userId: userData._id,
+          rfpDocumentId: rfpProject.documentId // If we have saved the RFP document ID
         }),
       });
 
@@ -463,7 +698,8 @@ export default function WorkspacePage() {
           proposal: {
             status: 'completed',
             document: data.proposal,
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            documentId: data.documentId // Store the document ID for reference
           }
         };
         
@@ -495,15 +731,17 @@ export default function WorkspacePage() {
     if (!currentProject?.proposal?.document || !workspace) return;
     
     try {
-      // Clean up the content - normalize line endings
-      const cleanContent = currentProject.proposal.document
-        .replace(/\r\n/g, '\n')
+      // Ensure proposal content is properly formatted
+      const content = currentProject.proposal.document;
+      
+      // Clean up the content
+      const cleanContent = prepareContentForPdf(content)
         .replace(/\n{3,}/g, '\n\n') // Replace excessive newlines
         .trim();
       
       const rfpDocument: RfpDocument = {
         title: `Proposal for: ${currentProject.title}`,
-        description: `Proposal in response to RFP: ${currentProject.description}`,
+        description: `Proposal in response to RFP: ${currentProject.description || "project requirements"}`,
         content: cleanContent,
         createdAt: currentProject.proposal.createdAt || new Date().toISOString(),
         createdBy: workspace.owner.username,
@@ -522,6 +760,41 @@ export default function WorkspacePage() {
       
       // Save the PDF
       const fileName = `Proposal_${currentProject.title.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      pdf.save(fileName);
+      
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('There was an error generating the PDF. Please try again.');
+    }
+  };
+
+  const handleDownloadDocument = (document: Document) => {
+    try {
+      // Format content for PDF
+      const cleanContent = prepareContentForPdf(document.content);
+      
+      const rfpDocument: RfpDocument = {
+        title: document.title,
+        description: document.originalRequest || document.title,
+        content: cleanContent,
+        createdAt: document.createdAt,
+        createdBy: document.createdBy.username,
+      };
+      
+      // Generate PDF
+      const pdf = generateRfpPdf(rfpDocument, {
+        title: document.type === 'rfp' ? 'REQUEST FOR PROPOSAL' : 'PROPOSAL DOCUMENT',
+        subtitle: document.title,
+        author: document.createdBy.username,
+        subject: document.type === 'rfp' ? 'RFP Document' : 'Proposal Document',
+        keywords: document.type === 'rfp' ? 'procurement, rfp, proposal, requirements' :
+                 'procurement, proposal, response, quotation',
+        pageSize: 'a4',
+        orientation: 'portrait'
+      });
+      
+      // Save the PDF
+      const fileName = `${document.type === 'rfp' ? 'RFP' : 'Proposal'}_${document.title.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
       pdf.save(fileName);
       
     } catch (error) {
@@ -630,6 +903,20 @@ export default function WorkspacePage() {
         >
           RFP Generator
         </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          style={{
+            padding: '0.75rem 1.5rem',
+            fontWeight: 'bold',
+            color: activeTab === 'history' ? '#3b82f6' : '#6b7280',
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'history' ? '3px solid #3b82f6' : '3px solid transparent',
+            cursor: 'pointer'
+          }}
+        >
+          Document History
+        </button>
       </div>
 
       {/* Main Content */}
@@ -648,7 +935,8 @@ export default function WorkspacePage() {
                 {workspace.description}
               </p>
               
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+              {/* Stats Container */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
                 <div style={{
                   background: '#f0f7ff',
                   padding: '1.5rem',
@@ -888,11 +1176,10 @@ export default function WorkspacePage() {
                       borderRadius: '0.5rem',
                       maxHeight: '300px',
                       overflow: 'auto',
-                      whiteSpace: 'pre-wrap',
                       fontSize: '0.9rem',
                       lineHeight: '1.6'
                     }}>
-                      {currentProject.finalDocument}
+                      {currentProject.finalDocument && formatDocumentContent(currentProject.finalDocument)}
                     </div>
                     <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
                       <button 
@@ -995,11 +1282,10 @@ export default function WorkspacePage() {
                       borderRadius: '0.5rem',
                       maxHeight: '300px',
                       overflow: 'auto',
-                      whiteSpace: 'pre-wrap',
                       fontSize: '0.9rem',
                       lineHeight: '1.6'
                     }}>
-                      {currentProject.proposal.document}
+                      {currentProject.proposal?.document && formatDocumentContent(currentProject.proposal.document)}
                     </div>
                     <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
                       <button 
@@ -1154,6 +1440,362 @@ export default function WorkspacePage() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'history' && (
+          <div>
+            {/* Document History Header */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '2rem'
+            }}>
+              <div>
+                <h2 style={{ margin: '0 0 0.5rem' }}>Document History</h2>
+                <p style={{ color: '#6b7280', margin: 0 }}>
+                  View and manage your generated RFPs and proposals
+                </p>
+              </div>
+              <div>
+                <div style={{
+                  display: 'flex',
+                  gap: '0.5rem',
+                  background: '#f1f5f9',
+                  padding: '0.25rem',
+                  borderRadius: '0.5rem'
+                }}>
+                  <button
+                    onClick={() => setDocumentFilter('all')}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.25rem',
+                      border: 'none',
+                      background: documentFilter === 'all' ? '#3b82f6' : 'transparent',
+                      color: documentFilter === 'all' ? 'white' : '#64748b',
+                      fontSize: '0.875rem',
+                      fontWeight: 'medium',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    All
+                  </button>
+                  <button
+                    onClick={() => setDocumentFilter('rfp')}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.25rem',
+                      border: 'none',
+                      background: documentFilter === 'rfp' ? '#3b82f6' : 'transparent',
+                      color: documentFilter === 'rfp' ? 'white' : '#64748b',
+                      fontSize: '0.875rem',
+                      fontWeight: 'medium',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    RFPs
+                  </button>
+                  <button
+                    onClick={() => setDocumentFilter('proposal')}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '0.25rem',
+                      border: 'none',
+                      background: documentFilter === 'proposal' ? '#3b82f6' : 'transparent',
+                      color: documentFilter === 'proposal' ? 'white' : '#64748b',
+                      fontSize: '0.875rem',
+                      fontWeight: 'medium',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Proposals
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Error Message */}
+            {documentError && (
+              <div style={{
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                color: '#dc2626',
+                padding: '0.75rem 1rem',
+                borderRadius: '0.5rem',
+                marginBottom: '1.5rem'
+              }}>
+                {documentError}
+              </div>
+            )}
+
+            {/* Document View */}
+            <div style={{ 
+              display: 'grid',
+              gridTemplateColumns: '350px 1fr',
+              gap: '2rem',
+              height: 'calc(100vh - 250px)',
+              minHeight: '500px'
+            }}>
+              {/* Document List */}
+              <div style={{
+                background: 'white',
+                borderRadius: '0.75rem',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                <div style={{
+                  padding: '1rem',
+                  borderBottom: '1px solid #e5e7eb',
+                  fontWeight: 'bold',
+                  color: '#374151'
+                }}>
+                  Documents ({documents.length})
+                </div>
+                
+                {isLoadingDocuments ? (
+                  <div style={{
+                    padding: '2rem',
+                    textAlign: 'center',
+                    color: '#6b7280'
+                  }}>
+                    <div style={{
+                      width: '30px',
+                      height: '30px',
+                      border: '3px solid #f3f3f3',
+                      borderTop: '3px solid #3b82f6',
+                      borderRadius: '50%',
+                      margin: '0 auto 1rem',
+                      animation: 'spin 1s linear infinite'
+                    }}></div>
+                    <p style={{ margin: 0 }}>Loading documents...</p>
+                    <style jsx>{`
+                      @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                      }
+                    `}</style>
+                  </div>
+                ) : documents.length === 0 ? (
+                  <div style={{
+                    padding: '2rem',
+                    textAlign: 'center',
+                    color: '#6b7280'
+                  }}>
+                    <p>No documents found.</p>
+                    <button
+                      onClick={() => setActiveTab('rfp-generator')}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        background: '#3b82f6',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.25rem',
+                        cursor: 'pointer',
+                        fontSize: '0.875rem'
+                      }}
+                    >
+                      Generate an RFP
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ 
+                    overflowY: 'auto',
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column'
+                  }}>
+                    {documents.map(doc => (
+                      <div
+                        key={doc._id}
+                        onClick={() => setSelectedDocument(doc)}
+                        style={{
+                          padding: '1rem',
+                          borderBottom: '1px solid #f3f4f6',
+                          cursor: 'pointer',
+                          background: selectedDocument?._id === doc._id ? '#f0f9ff' : 'white',
+                          borderLeft: selectedDocument?._id === doc._id ? '4px solid #3b82f6' : '4px solid transparent'
+                        }}
+                      >
+                        <div style={{ 
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '0.5rem'
+                        }}>
+                          <h3 style={{
+                            margin: 0,
+                            fontSize: '1rem',
+                            color: '#111827'
+                          }}>
+                            {doc.title.length > 40 ? `${doc.title.substring(0, 40)}...` : doc.title}
+                          </h3>
+                          <span style={{
+                            display: 'inline-block',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: '0.25rem',
+                            fontSize: '0.75rem',
+                            background: doc.type === 'rfp' ? '#dbeafe' : '#f3e8ff',
+                            color: doc.type === 'rfp' ? '#1e40af' : '#7e22ce',
+                            fontWeight: 'bold'
+                          }}>
+                            {doc.type === 'rfp' ? 'RFP' : 'Proposal'}
+                          </span>
+                        </div>
+                        <div style={{ 
+                          fontSize: '0.875rem',
+                          color: '#6b7280',
+                          marginBottom: '0.5rem'
+                        }}>
+                          {doc.originalRequest && doc.originalRequest.length > 50 
+                            ? `${doc.originalRequest.substring(0, 50)}...` 
+                            : doc.originalRequest || 'No description'}
+                        </div>
+                        <div style={{ 
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '0.75rem',
+                          color: '#9ca3af'
+                        }}>
+                          <span>
+                            By: {doc.createdBy.username}
+                          </span>
+                          <span>
+                            {new Date(doc.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Document Viewer */}
+              <div style={{
+                background: 'white',
+                borderRadius: '0.75rem',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                {selectedDocument ? (
+                  <>
+                    <div style={{
+                      padding: '1rem',
+                      borderBottom: '1px solid #e5e7eb',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <h3 style={{ margin: '0 0 0.25rem', color: '#111827' }}>
+                          {selectedDocument.title}
+                        </h3>
+                        <p style={{ margin: 0, fontSize: '0.875rem', color: '#6b7280' }}>
+                          Created {new Date(selectedDocument.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDownloadDocument(selectedDocument)}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          background: '#3b82f6',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '0.25rem',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          fontSize: '0.875rem',
+                          fontWeight: 'medium'
+                        }}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                          <polyline points="7 10 12 15 17 10"></polyline>
+                          <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Download PDF
+                      </button>
+                    </div>
+                    <div style={{
+                      flex: 1,
+                      padding: '1rem',
+                      overflowY: 'auto'
+                    }}>
+                      <div style={{
+                        fontFamily: 'system-ui, -apple-system, sans-serif',
+                        fontSize: '0.9rem',
+                        lineHeight: '1.6'
+                      }}>
+                        {selectedDocument && formatDocumentContent(selectedDocument.content)}
+                      </div>
+                    </div>
+                    {selectedDocument.type === 'rfp' && (
+                      <div style={{
+                        padding: '1rem',
+                        borderTop: '1px solid #e5e7eb',
+                        background: '#f9fafb'
+                      }}>
+                        <button
+                          onClick={() => {
+                            // Create a project from this RFP document
+                            const project: RFPProject = {
+                              id: `existing_${selectedDocument._id}`,
+                              title: selectedDocument.title,
+                              description: selectedDocument.originalRequest || 'RFP Project',
+                              status: 'completed',
+                              createdAt: selectedDocument.createdAt,
+                              agents: [],
+                              finalDocument: selectedDocument.content,
+                              documentId: selectedDocument._id
+                            };
+                            
+                            setProjects([project, ...projects]);
+                            setCurrentProject(project);
+                            setActiveTab('rfp-generator');
+                          }}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            background: '#8b5cf6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '0.25rem',
+                            cursor: 'pointer',
+                            fontSize: '0.875rem',
+                            fontWeight: 'medium'
+                          }}
+                        >
+                          Generate Proposal from this RFP
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: '100%',
+                    color: '#6b7280'
+                  }}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: '1rem', opacity: 0.5 }}>
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                      <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <p>Select a document to view</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1372,6 +2014,7 @@ export default function WorkspacePage() {
                 Industry/Sector
               </label>
               <input
+
                 id="industry"
                 type="text"
                 value={companyInfo.industry}

@@ -138,7 +138,7 @@ export default function Signup() {
         {/* Logo and Title */}
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <Image
-            src="/next.svg"
+            src="/logo-aura-ai.jpeg"
             alt="ProcureAgents Logo"
             width={50}
             height={50}

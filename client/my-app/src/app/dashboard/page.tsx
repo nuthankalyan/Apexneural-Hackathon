@@ -44,6 +44,10 @@ export default function Dashboard() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
+  // Add state for delete confirmation
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<Workspace | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
     // Check if user is authenticated
@@ -148,6 +152,41 @@ export default function Dashboard() {
     }
   };
 
+  // Add delete workspace function
+  const handleDeleteWorkspace = async () => {
+    if (!workspaceToDelete) return;
+    
+    setDeleteLoading(true);
+    setWorkspaceError('');
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/workspaces/${workspaceToDelete._id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Remove deleted workspace from state
+        setWorkspaces(workspaces.filter(w => w._id !== workspaceToDelete._id));
+        setShowDeleteConfirmation(false);
+        setWorkspaceToDelete(null);
+      } else {
+        setWorkspaceError(data.message || 'Failed to delete workspace');
+      }
+    } catch (error) {
+      console.error('Error deleting workspace:', error);
+      setWorkspaceError('Network error. Please try again.');
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
   const handleWorkspaceClick = (workspaceId: string) => {
     router.push(`/workspace/${workspaceId}`);
   };
@@ -199,13 +238,17 @@ export default function Dashboard() {
         alignItems: 'center'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Image
-            src="/next.svg"
-            alt="ProcureAgents Logo"
-            width={40}
-            height={40}
-          />
-          <h1 style={{ fontSize: '1.5rem', margin: 0 }}>ProcureAgents</h1>
+          <div style={{ position: 'relative', width: '40px', height: '40px' }}>
+            <Image
+              src="/logo-aura-ai.jpeg"
+              alt="AURA AI Logo"
+              width={40}
+              height={40}
+              priority
+              style={{ objectFit: 'contain' }}
+            />
+          </div>
+          <h1 style={{ fontSize: '1.5rem', margin: 0, color: '#1e40af' }}>AURA AI</h1>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -347,81 +390,7 @@ export default function Dashboard() {
             </section>
 
             {/* Quick Actions Section */}
-            <section style={{
-              background: 'white',
-              borderRadius: '1rem',
-              padding: '2rem',
-              marginBottom: '2rem',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-            }}>
-              <h3 style={{ marginBottom: '1.5rem', color: '#1f2937' }}>Quick Actions</h3>
-              
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
-                <button style={{
-                  padding: '0.75rem 1rem',
-                  background: '#3b82f6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  cursor: 'pointer',
-                  fontWeight: 'bold',
-                  transition: 'background 0.2s ease'
-                }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#2563eb'}
-                onMouseOut={(e) => e.currentTarget.style.background = '#3b82f6'}>
-                  Create New RFP
-                </button>
-                
-                <button style={{
-                  padding: '0.75rem 1rem',
-                  background: '#10b981',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  cursor: 'pointer',
-                  fontWeight: 'bold',
-                  transition: 'background 0.2s ease'
-                }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#059669'}
-                onMouseOut={(e) => e.currentTarget.style.background = '#10b981'}>
-                  Create New RFQ
-                </button>
-                
-                <button style={{
-                  padding: '0.75rem 1rem',
-                  background: '#8b5cf6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '0.5rem',
-                  cursor: 'pointer',
-                  fontWeight: 'bold',
-                  transition: 'background 0.2s ease'
-                }}
-                onMouseOver={(e) => e.currentTarget.style.background = '#7c3aed'}
-                onMouseOut={(e) => e.currentTarget.style.background = '#8b5cf6'}>
-                  Generate Proposal
-                </button>
-
-                <button
-                  onClick={() => setActiveTab('workspaces')}
-                  style={{
-                    padding: '0.75rem 1rem',
-                    background: '#f59e0b',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '0.5rem',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                    transition: 'background 0.2s ease'
-                  }}
-                  onMouseOver={(e) => e.currentTarget.style.background = '#d97706'}
-                  onMouseOut={(e) => e.currentTarget.style.background = '#f59e0b'}
-                >
-                  Manage Workspaces
-                </button>
-              </div>
-            </section>
-
+            
             {/* Recent Activity Section */}
             <section style={{
               background: 'white',
@@ -543,8 +512,8 @@ export default function Dashboard() {
                 {workspaces.length > 0 ? workspaces.map(workspace => (
                   <div 
                     key={workspace._id}
-                    onClick={() => handleWorkspaceClick(workspace._id)}
                     style={{
+                      position: 'relative',
                       background: 'white',
                       borderRadius: '0.5rem',
                       padding: '1.5rem',
@@ -556,51 +525,93 @@ export default function Dashboard() {
                     onMouseOver={(e) => {
                       e.currentTarget.style.transform = 'translateY(-2px)';
                       e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+                      // Show delete button on hover
+                      const deleteButton = e.currentTarget.querySelector('.delete-button') as HTMLElement;
+                      if (deleteButton) deleteButton.style.opacity = '1';
                     }}
                     onMouseOut={(e) => {
                       e.currentTarget.style.transform = 'translateY(0)';
                       e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)';
+                      // Hide delete button when not hovering
+                      const deleteButton = e.currentTarget.querySelector('.delete-button') as HTMLElement;
+                      if (deleteButton) deleteButton.style.opacity = '0';
                     }}
                   >
-                    <h3 style={{ margin: '0 0 0.5rem', color: '#111827' }}>{workspace.name}</h3>
-                    <p style={{ margin: '0 0 1rem', color: '#6b7280', fontSize: '0.9rem' }}>{workspace.description}</p>
-                    
-                    <div style={{ 
-                      display: 'flex', 
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      fontSize: '0.875rem',
-                      color: '#9ca3af'
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '0.5rem' }}>
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                          <line x1="16" y1="2" x2="16" y2="6"></line>
-                          <line x1="8" y1="2" x2="8" y2="6"></line>
-                          <line x1="3" y1="10" x2="21" y2="10"></line>
-                        </svg>
-                        Created {new Date(workspace.createdAt).toLocaleDateString('en-US', { 
-                          year: 'numeric', 
-                          month: 'short', 
-                          day: 'numeric' 
-                        })}
+                    {/* Delete Button */}
+                    <div 
+                      className="delete-button"
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent card click
+                        setWorkspaceToDelete(workspace);
+                        setShowDeleteConfirmation(true);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: '0.75rem',
+                        right: '0.75rem',
+                        background: '#fee2e2',
+                        color: '#dc2626',
+                        width: '28px',
+                        height: '28px',
+                        borderRadius: '50%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        opacity: 0,
+                        transition: 'opacity 0.2s ease',
+                        zIndex: 2
+                      }}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18"></path>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                    </div>
+
+                    {/* Card content - wrap in div to handle click */}
+                    <div onClick={() => handleWorkspaceClick(workspace._id)}>
+                      <h3 style={{ margin: '0 0 0.5rem', color: '#111827' }}>{workspace.name}</h3>
+                      <p style={{ margin: '0 0 1rem', color: '#6b7280', fontSize: '0.9rem' }}>{workspace.description}</p>
+                      
+                      <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '0.875rem',
+                        color: '#9ca3af'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '0.5rem' }}>
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                            <line x1="16" y1="2" x2="16" y2="6"></line>
+                            <line x1="8" y1="2" x2="8" y2="6"></line>
+                            <line x1="3" y1="10" x2="21" y2="10"></line>
+                          </svg>
+                          Created {new Date(workspace.createdAt).toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'short', 
+                            day: 'numeric' 
+                          })}
+                        </div>
+                        
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '0.25rem' }}>
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                          </svg>
+                          {workspace.memberCount} member{workspace.memberCount !== 1 ? 's' : ''}
+                        </div>
                       </div>
                       
-                      <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '0.25rem' }}>
-                          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                          <circle cx="12" cy="7" r="4"></circle>
-                        </svg>
-                        {workspace.memberCount} member{workspace.memberCount !== 1 ? 's' : ''}
+                      <div style={{ 
+                        marginTop: '0.75rem',
+                        fontSize: '0.8rem',
+                        color: '#6b7280'
+                      }}>
+                        Owner: {workspace.owner.username}
                       </div>
-                    </div>
-                    
-                    <div style={{ 
-                      marginTop: '0.75rem',
-                      fontSize: '0.8rem',
-                      color: '#6b7280'
-                    }}>
-                      Owner: {workspace.owner.username}
                     </div>
                   </div>
                 )) : (
@@ -781,6 +792,92 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </form>
+                </div>
+              </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {showDeleteConfirmation && (
+              <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 1000
+              }}>
+                <div style={{
+                  background: 'white',
+                  padding: '2rem',
+                  borderRadius: '0.75rem',
+                  maxWidth: '450px',
+                  width: '100%',
+                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.2)'
+                }}>
+                  <h3 style={{ margin: '0 0 1rem', color: '#1f2937' }}>Delete Workspace</h3>
+                  
+                  <p style={{ margin: '0 0 1.5rem', color: '#4b5563' }}>
+                    Are you sure you want to delete <strong>{workspaceToDelete?.name}</strong>? This action cannot be undone and all associated data will be permanently removed.
+                  </p>
+
+                  {workspaceError && (
+                    <div style={{
+                      background: '#fef2f2',
+                      border: '1px solid #fecaca',
+                      color: '#dc2626',
+                      padding: '0.75rem',
+                      borderRadius: '0.5rem',
+                      marginBottom: '1.5rem',
+                      fontSize: '0.9rem'
+                    }}>
+                      {workspaceError}
+                    </div>
+                  )}
+
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'flex-end',
+                    gap: '1rem'
+                  }}>
+                    <button
+                      onClick={() => {
+                        setShowDeleteConfirmation(false);
+                        setWorkspaceToDelete(null);
+                        setWorkspaceError('');
+                      }}
+                      disabled={deleteLoading}
+                      style={{
+                        padding: '0.75rem 1.5rem',
+                        background: 'white',
+                        color: '#6b7280',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '0.5rem',
+                        fontSize: '1rem',
+                        cursor: deleteLoading ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleDeleteWorkspace}
+                      disabled={deleteLoading}
+                      style={{
+                        padding: '0.75rem 1.5rem',
+                        background: deleteLoading ? '#9ca3af' : '#ef4444',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '0.5rem',
+                        fontSize: '1rem',
+                        cursor: deleteLoading ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      {deleteLoading ? 'Deleting...' : 'Delete Workspace'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

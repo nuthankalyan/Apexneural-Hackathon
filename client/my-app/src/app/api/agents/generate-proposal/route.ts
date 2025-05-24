@@ -48,7 +48,7 @@ const PROPOSAL_AGENT_PROMPTS = {
 
 export async function POST(request: NextRequest) {
   try {
-    const { rfpDocument, companyInfo } = await request.json();
+    const { rfpDocument, companyInfo, workspaceId, userId, rfpDocumentId } = await request.json();
 
     if (!rfpDocument) {
       return NextResponse.json(
@@ -63,9 +63,60 @@ export async function POST(request: NextRequest) {
     // Generate the final proposal document
     const finalProposal = await generateFinalProposal(rfpDocument, agentResults, companyInfo || {});
 
+    let documentId = null;
+    
+    // Only save to database if workspaceId and userId are provided
+    if (workspaceId && userId) {
+      try {
+        // Extract a title from the document
+        let title = 'Proposal Document';
+        const titleMatch = finalProposal.match(/^\s*(?:#+\s*)?(.*?Proposal.*?)(?:\r?\n|$)/i);
+        if (titleMatch && titleMatch[1]) {
+          title = titleMatch[1].trim();
+        } else {
+          // Try to extract from first paragraph
+          const firstParagraph = finalProposal.split('\n')[0];
+          if (firstParagraph && firstParagraph.length < 100) {
+            title = firstParagraph.trim();
+          }
+        }
+        
+        // Save to database
+        const token = request.headers.get('authorization')?.split(' ')[1];
+        const documentResponse = await fetch(`${process.env.API_BASE_URL || 'http://localhost:5000'}/api/documents`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            title,
+            type: 'proposal',
+            content: finalProposal,
+            workspaceId,
+            originalRequest: companyInfo?.name ? `Proposal for ${companyInfo.name}` : 'Proposal',
+            relatedDocumentId: rfpDocumentId || undefined,
+            metadata: {
+              companyInfo: companyInfo || {},
+              agentResults: Object.keys(agentResults).join(',')
+            }
+          })
+        });
+        
+        const documentData = await documentResponse.json();
+        if (documentData.success) {
+          documentId = documentData.document._id;
+        }
+      } catch (error) {
+        console.error('Error saving proposal document to database:', error);
+        // Continue even if database save fails
+      }
+    }
+
     return NextResponse.json({
       success: true,
       proposal: finalProposal,
+      documentId,
       agentResults,
       timestamp: new Date().toISOString()
     });
@@ -145,12 +196,29 @@ async function generateFinalProposal(rfpDocument: string, agentResults: Record<s
     // Extract the title and some key points from the RFP
     const rfpSnippet = rfpDocument.substring(0, 1500); // Just use beginning for context
     
-    // Create prompt for final proposal with clear instructions to incorporate full content
+    // Create prompt for final proposal with clear instructions for proper formatting
     const promptText = `You are an expert Proposal Writer. Create a complete, professional proposal document in response to an RFP.
 Incorporate the specialized sections provided below into a cohesive, well-structured proposal document.
 
-IMPORTANT: DO NOT use placeholders like "[See TECHNICAL APPROACH SECTION above]" or similar references. 
-Instead, fully integrate the content from each specialized section directly into the proposal.
+IMPORTANT FORMATTING REQUIREMENTS:
+1. Format all section headers as "1. SECTION TITLE" in uppercase with numbering
+2. Format all subsection headers as "1.1 Subsection Title" with proper capitalization
+3. Use bold formatting (**text**) for important terms, names, and key points
+4. Format any lists as proper bullet points with "-" character
+5. Ensure proper spacing between sections (use double line breaks)
+6. Keep paragraphs well-structured with clear topic sentences
+7. DO NOT use placeholder text like "[See SECTION above]"
+8. VERY IMPORTANT: Include substantial content under each numbered section, don't leave any section empty
+
+FOR TABLES (such as pricing, timelines, or comparisons):
+- Format any tabular data using proper markdown table format
+- Always include the | character at the beginning and end of each row
+- Include header rows with a separator row beneath (using | --- | format)
+- Example:
+| Item | Description | Price |
+| --- | --- | --- |
+| Service A | Core development | $10,000 |
+| Service B | Quality assurance | $5,000 |
 
 ${companyInfo ? `
 COMPANY INFORMATION:
@@ -188,11 +256,18 @@ Format the proposal with the following structure:
 10. TERMS & CONDITIONS
 11. CONCLUSION
 
-Create a professional, compelling proposal that highlights strengths and differentiators. Use appropriate formatting.
-The proposal should be ready to present to a client with minimal editing.
+FORMATTING EXAMPLES:
+Section header:
+"1. EXECUTIVE SUMMARY"
 
-VERY IMPORTANT: For sections 4, 8, and 9, do not use placeholder text like "[See SECTION above]". 
-Fully incorporate the relevant content from the specialized agent inputs.`;
+Subsection header:
+"1.1 Project Goals"
+
+Bold important text:
+"The proposed solution will be completed within **eight (8) months** from contract signing."
+
+Create a professional, compelling proposal that highlights strengths and differentiators. 
+VERY IMPORTANT: For sections 4, 8, and 9, fully incorporate the relevant content from the specialized agent inputs, and ensure proper formatting of all sections.`;
 
     // Fix: Use the correct method to generate content
     const response = await ai.models.generateContent({

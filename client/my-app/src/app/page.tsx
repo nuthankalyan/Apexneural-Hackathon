@@ -76,13 +76,13 @@ export default function Home() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <Image
-            src="/next.svg"
+            src="/logo-aura-ai.jpeg"
             alt="Logo"
             width={40}
             height={40}
             priority
           />
-          <h1 style={{ fontSize: '1.5rem', margin: 0 }}>ProcureAgents</h1>
+          <h1 style={{ fontSize: '1.5rem', margin: 0 }}>AURA AI</h1>
         </div>
         <div style={{ display: 'flex', gap: '1rem' }}>
           <Link href="/login" style={{ textDecoration: 'none' }}>
